@@ -1,0 +1,24 @@
+# Pothole & Road Anomaly Detector - Dependencies
+
+# Core Deep Learning
+tensorflow
+keras
+
+# Computer Vision
+opencv-python
+opencv-contrib-python
+
+# Scientific Computing
+numpy
+scipy
+
+# Machine Learning
+scikit-learn
+
+# Visualization
+matplotlib
+seaborn
+
+# Data Processing
+Pillow
+pandas
