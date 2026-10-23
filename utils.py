@@ -1,233 +1,128 @@
 """
-Utility Functions Module
-Grad-CAM, visualization, and helper functions
+Utility module: metrics, Grad-CAM and plots.
 """
 
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras import backend as K
-from tensorflow.keras.models import Model
-import seaborn as sns
-from sklearn.metrics import roc_curve, auc
+import torch.nn.functional as F
+from matplotlib.patches import Rectangle
 
-def generate_grad_cam(model, img, layer_name=None):
+BLUE = '#2a78d6'
+GREY = '#8a8984'
+INK = '#0b0b0b'
+INK_2 = '#52514e'
+BOX = '#1baf7a'
+
+
+def binary_metrics(y_true, y_pred):
+    """Accuracy, precision, recall and F1 for the positive class (1)."""
+    y_true, y_pred = np.asarray(y_true), np.asarray(y_pred)
+    tp = int(((y_pred == 1) & (y_true == 1)).sum())
+    fp = int(((y_pred == 1) & (y_true == 0)).sum())
+    fn = int(((y_pred == 0) & (y_true == 1)).sum())
+    tn = int(((y_pred == 0) & (y_true == 0)).sum())
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return {'accuracy': (tp + tn) / len(y_true), 'precision': precision,
+            'recall': recall, 'f1': f1, 'tp': tp, 'fp': fp, 'fn': fn, 'tn': tn}
+
+
+def bootstrap_ci(y_true, y_pred, metric='f1', n=2000, seed=0):
+    """95% bootstrap interval for one metric over test images."""
+    y_true, y_pred = np.asarray(y_true), np.asarray(y_pred)
+    rng = np.random.default_rng(seed)
+    vals = []
+    for _ in range(n):
+        idx = rng.integers(0, len(y_true), len(y_true))
+        vals.append(binary_metrics(y_true[idx], y_pred[idx])[metric])
+    return float(np.percentile(vals, 2.5)), float(np.percentile(vals, 97.5))
+
+
+def grad_cam(model, layer, x):
+    """Grad-CAM heat map for the pothole logit.
+
+    x: one input tensor (1, 3, H, W). Returns an (H, W) array in [0, 1]
+    showing which parts of the input pushed the score up.
     """
-    Generate Grad-CAM heatmap for interpretability.
-    Fixed version for binary classification.
-    
-    Args:
-        model: Trained Keras model
-        img: Preprocessed image (normalized, shape: (H, W, 3))
-        layer_name: Name of target layer (auto-detected if None)
-    
-    Returns:
-        heatmap: Grad-CAM heatmap (values 0-1)
-    """
+    store = {}
+
+    def keep(module, inputs, out):
+        store['act'] = out
+        out.register_hook(lambda g: store.update(grad=g))
+
+    hook = layer.register_forward_hook(keep)
     try:
-        # Find last convolutional layer if not specified
-        if layer_name is None:
-            for layer in reversed(model.layers):
-                if 'conv' in layer.name.lower():
-                    layer_name = layer.name
-                    break
-        
-        if layer_name is None:
-            raise ValueError("No convolutional layer found in model")
-        
-        # Create a model that outputs both predictions and conv layer output
-        grad_model = Model(
-            inputs=model.input,
-            outputs=[model.get_layer(layer_name).output, model.output]
-        )
-        
-        # Prepare input
-        img_tensor = tf.expand_dims(img, 0)
-        
-        # Compute gradient
-        with tf.GradientTape() as tape:
-            conv_outputs, predictions = grad_model(img_tensor)
-            # For binary classification, we want the predicted class score
-            loss = predictions[0][0]
-        
-        # Get gradients
-        grads = tape.gradient(loss, conv_outputs)
-        
-        # Global average pooling of gradients
-        pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-        
-        # Weight conv outputs by gradients
-        conv_outputs = conv_outputs[0]
-        pooled_grads = pooled_grads.numpy()
-        conv_outputs = conv_outputs.numpy()
-        
-        # Compute weighted combination
-        for i in range(pooled_grads.shape[-1]):
-            conv_outputs[:, :, i] *= pooled_grads[i]
-        
-        # Average over all filters
-        heatmap = np.mean(conv_outputs, axis=-1)
-        
-        # ReLU and normalize
-        heatmap = np.maximum(heatmap, 0)
-        if np.max(heatmap) > 0:
-            heatmap /= np.max(heatmap)
-        
-        return heatmap
-        
-    except Exception as e:
-        print(f"Error in Grad-CAM: {e}")
-        # Return empty heatmap on error
-        return np.zeros((7, 7))
+        model.zero_grad()
+        model(x.requires_grad_(True))[0, 0].backward()
+    finally:
+        hook.remove()
+    weights = store['grad'].mean(dim=(2, 3), keepdim=True)
+    cam = F.relu((weights * store['act']).sum(dim=1, keepdim=True))
+    cam = F.interpolate(cam, size=x.shape[2:], mode='bilinear', align_corners=False)[0, 0]
+    cam = cam.detach().numpy()
+    return cam / cam.max() if cam.max() > 0 else cam
 
 
-def plot_confusion_matrix(cm, classes, save_path='confusion_matrix.png'):
-    """
-    Plot confusion matrix with better styling.
-    
-    Args:
-        cm: Confusion matrix array
-        classes: List of class names
-        save_path: Path to save figure
-    """
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                xticklabels=classes, yticklabels=classes,
-                cbar_kws={'label': 'Count'})
-    plt.xlabel('Predicted Label', fontsize=12)
-    plt.ylabel('True Label', fontsize=12)
-    plt.title('Confusion Matrix', fontsize=14, fontweight='bold')
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"Confusion matrix saved to {save_path}")
-    plt.show()
+def plot_confusion_matrix(cm, classes, path):
+    fig, ax = plt.subplots(figsize=(4.2, 3.6))
+    ax.imshow(cm, cmap='Blues', vmin=0)
+    for i in range(2):
+        for j in range(2):
+            ax.text(j, i, str(cm[i][j]), ha='center', va='center', fontsize=13,
+                    color='white' if cm[i][j] > np.max(cm) / 2 else INK)
+    ax.set_xticks([0, 1], classes)
+    ax.set_yticks([0, 1], classes)
+    ax.set_xlabel('Predicted', color=INK_2)
+    ax.set_ylabel('True', color=INK_2)
+    ax.set_title('Test set confusion matrix', color=INK)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
 
 
-def plot_roc_curve(y_true, y_pred_prob, save_path='roc_curve.png'):
-    """
-    Plot ROC curve with AUC score.
-    
-    Args:
-        y_true: True labels
-        y_pred_prob: Predicted probabilities
-        save_path: Path to save figure
-    """
-    fpr, tpr, thresholds = roc_curve(y_true, y_pred_prob)
-    roc_auc = auc(fpr, tpr)
-    
-    plt.figure(figsize=(8, 6))
-    plt.plot(fpr, tpr, color='darkorange', lw=2, 
-             label=f'ROC curve (AUC = {roc_auc:.3f})')
-    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', 
-             label='Random Classifier')
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate', fontsize=12)
-    plt.ylabel('True Positive Rate', fontsize=12)
-    plt.title('Receiver Operating Characteristic (ROC) Curve', 
-              fontsize=14, fontweight='bold')
-    plt.legend(loc="lower right", fontsize=10)
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"ROC curve saved to {save_path}")
-    plt.show()
+def plot_pr_curve(precision, recall, ap, base_rate, path):
+    fig, ax = plt.subplots(figsize=(4.6, 3.8))
+    ax.plot(recall, precision, color=BLUE, lw=2, label=f'Model (AP {ap:.2f})')
+    ax.axhline(base_rate, color=GREY, lw=1.5, ls='--',
+               label=f'Always "pothole" ({base_rate:.2f})')
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1.02)
+    ax.set_xlabel('Recall', color=INK_2)
+    ax.set_ylabel('Precision', color=INK_2)
+    ax.set_title('Test set precision-recall curve', color=INK)
+    ax.grid(alpha=0.25)
+    ax.legend(loc='lower left', frameon=False)
+    for side in ('top', 'right'):
+        ax.spines[side].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
 
 
-def plot_training_history(history, save_path='training_history.png'):
-    """
-    Plot training and validation metrics over epochs.
-    
-    Args:
-        history: Keras training history object
-        save_path: Path to save figure
-    """
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    
-    # Accuracy
-    axes[0, 0].plot(history.history['accuracy'], label='Train', linewidth=2)
-    axes[0, 0].plot(history.history['val_accuracy'], label='Validation', linewidth=2)
-    axes[0, 0].set_title('Model Accuracy', fontsize=12, fontweight='bold')
-    axes[0, 0].set_xlabel('Epoch')
-    axes[0, 0].set_ylabel('Accuracy')
-    axes[0, 0].legend()
-    axes[0, 0].grid(alpha=0.3)
-    
-    # Loss
-    axes[0, 1].plot(history.history['loss'], label='Train', linewidth=2)
-    axes[0, 1].plot(history.history['val_loss'], label='Validation', linewidth=2)
-    axes[0, 1].set_title('Model Loss', fontsize=12, fontweight='bold')
-    axes[0, 1].set_xlabel('Epoch')
-    axes[0, 1].set_ylabel('Loss')
-    axes[0, 1].legend()
-    axes[0, 1].grid(alpha=0.3)
-    
-    # Precision
-    if 'precision' in history.history:
-        axes[1, 0].plot(history.history['precision'], label='Train', linewidth=2)
-        axes[1, 0].plot(history.history['val_precision'], label='Validation', linewidth=2)
-        axes[1, 0].set_title('Model Precision', fontsize=12, fontweight='bold')
-        axes[1, 0].set_xlabel('Epoch')
-        axes[1, 0].set_ylabel('Precision')
-        axes[1, 0].legend()
-        axes[1, 0].grid(alpha=0.3)
-    
-    # Recall
-    if 'recall' in history.history:
-        axes[1, 1].plot(history.history['recall'], label='Train', linewidth=2)
-        axes[1, 1].plot(history.history['val_recall'], label='Validation', linewidth=2)
-        axes[1, 1].set_title('Model Recall', fontsize=12, fontweight='bold')
-        axes[1, 1].set_xlabel('Epoch')
-        axes[1, 1].set_ylabel('Recall')
-        axes[1, 1].legend()
-        axes[1, 1].grid(alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"Training history saved to {save_path}")
-    plt.show()
-
-
-def save_predictions_sample(model, test_gen, num_samples=16, save_path='predictions_sample.png'):
-    """
-    Visualize model predictions on test samples.
-    
-    Args:
-        model: Trained model
-        test_gen: Test data generator
-        num_samples: Number of samples to visualize
-        save_path: Path to save figure
-    """
-    # Get a batch of test images
-    test_images, test_labels = next(test_gen)
-    test_images = test_images[:num_samples]
-    test_labels = test_labels[:num_samples]
-    
-    # Make predictions
-    predictions = model.predict(test_images)
-    
-    # Plot
-    rows = int(np.sqrt(num_samples))
-    cols = int(np.ceil(num_samples / rows))
-    
-    fig, axes = plt.subplots(rows, cols, figsize=(15, 15))
-    axes = axes.flatten()
-    
-    class_names = ['Normal', 'Pothole']
-    
-    for i in range(num_samples):
-        axes[i].imshow(test_images[i])
-        
-        true_label = class_names[int(test_labels[i])]
-        pred_label = class_names[int(predictions[i] > 0.5)]
-        confidence = predictions[i][0] if predictions[i] > 0.5 else 1 - predictions[i][0]
-        
-        color = 'green' if true_label == pred_label else 'red'
-        axes[i].set_title(f"True: {true_label}\nPred: {pred_label} ({confidence:.2f})",
-                         color=color, fontweight='bold')
-        axes[i].axis('off')
-    
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"Predictions sample saved to {save_path}")
-    plt.show()
+def plot_examples(examples, path):
+    """examples: dicts with 'strip' (H, W, 3 uint8), 'cam' (H, W), 'boxes'
+    (x, y, w, h in strip pixels) and 'title'. One row per example: the road
+    band with the labelled pothole boxes, and the Grad-CAM overlay."""
+    n = len(examples)
+    h, w = examples[0]['strip'].shape[:2]
+    height = n * (13 / 2 * h / w + 0.45) + 0.6
+    fig, axes = plt.subplots(n, 2, figsize=(13, height))
+    axes = np.atleast_2d(axes)
+    for row, ex in zip(axes, examples):
+        row[0].imshow(ex['strip'])
+        for (x, y, bw, bh) in ex['boxes']:
+            row[0].add_patch(Rectangle((x, y), bw, bh, fill=False, ec=BOX, lw=1.5))
+        row[1].imshow(ex['strip'])
+        row[1].imshow(ex['cam'], cmap='jet', alpha=0.4, vmin=0, vmax=1)
+        row[0].set_title(ex['title'], loc='left', fontsize=10, color=INK)
+        for ax in row:
+            ax.axis('off')
+    fig.suptitle('Left: road band, green boxes are potholes marked by the dataset authors.   '
+                 'Right: Grad-CAM, red areas raised the pothole score most.',
+                 x=0.01, ha='left', fontsize=10, color=INK_2)
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.35 / height))
+    fig.savefig(path, dpi=110, pil_kwargs={'quality': 85})
+    plt.close(fig)

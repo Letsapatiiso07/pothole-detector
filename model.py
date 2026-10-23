@@ -1,76 +1,44 @@
 """
-Model Architecture Module
-ResNet50 with transfer learning for pothole detection
+Model module: an ImageNet-pretrained backbone with a one-logit head
+for pothole / no pothole.
 """
 
-from tensorflow.keras.applications import ResNet50, EfficientNetB0, MobileNetV2
-from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout, BatchNormalization
-from tensorflow.keras.models import Model
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.regularizers import l2
+import torch
+from torch import nn
+from torchvision import models
 
-def build_model(input_shape, backbone='resnet50', trainable_layers=10):
-    """
-    Build a CNN model using transfer learning for binary classification.
-    
-    Args:
-        input_shape: Tuple (height, width, channels)
-        backbone: 'resnet50', 'efficientnet', or 'mobilenet'
-        trainable_layers: Number of layers from the top to make trainable
-    
-    Returns:
-        Compiled Keras model
-    """
-    try:
-        # Select backbone
-        if backbone == 'resnet50':
-            base_model = ResNet50(weights='imagenet', include_top=False, input_shape=input_shape)
-        elif backbone == 'efficientnet':
-            base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=input_shape)
-        elif backbone == 'mobilenet':
-            base_model = MobileNetV2(weights='imagenet', include_top=False, input_shape=input_shape)
-        else:
-            raise ValueError(f"Unknown backbone: {backbone}")
-        
-        # Freeze base model initially
-        for layer in base_model.layers:
-            layer.trainable = False
-        
-        # Unfreeze top layers for fine-tuning
-        if trainable_layers > 0:
-            for layer in base_model.layers[-trainable_layers:]:
-                layer.trainable = True
-        
-        # Build classification head
-        x = base_model.output
-        x = GlobalAveragePooling2D()(x)
-        x = Dense(512, activation='relu', kernel_regularizer=l2(0.01))(x)
-        x = BatchNormalization()(x)
-        x = Dropout(0.5)(x)
-        x = Dense(256, activation='relu', kernel_regularizer=l2(0.01))(x)
-        x = BatchNormalization()(x)
-        x = Dropout(0.3)(x)
-        predictions = Dense(1, activation='sigmoid')(x)
-        
-        model = Model(inputs=base_model.input, outputs=predictions)
-        
-        # Compile model
-        model.compile(
-            optimizer=Adam(learning_rate=0.001),
-            loss='binary_crossentropy',
-            metrics=['accuracy', 'Precision', 'Recall']
-        )
-        
-        print(f"\n=== Model Architecture ({backbone}) ===")
-        print(f"Total params: {model.count_params():,}")
-        print(f"Trainable params: {sum([np.prod(v.shape) for v in model.trainable_weights]):,}")
-        print(f"Non-trainable params: {sum([np.prod(v.shape) for v in model.non_trainable_weights]):,}")
-        
-        return model
-        
-    except Exception as e:
-        print(f"Error building model: {e}")
-        raise
+BACKBONES = {
+    'mobilenet_v3_small': (models.mobilenet_v3_small, models.MobileNet_V3_Small_Weights.DEFAULT),
+    'resnet18': (models.resnet18, models.ResNet18_Weights.DEFAULT),
+}
 
 
-import numpy as np
+def build_model(backbone='mobilenet_v3_small', pretrained=True):
+    """Return a classifier that outputs one logit (pothole if > 0)."""
+    if backbone not in BACKBONES:
+        raise ValueError(f'Unknown backbone {backbone}; choose from {list(BACKBONES)}')
+    fn, weights = BACKBONES[backbone]
+    model = fn(weights=weights if pretrained else None)
+    if backbone == 'resnet18':
+        model.fc = nn.Linear(model.fc.in_features, 1)
+    else:
+        model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, 1)
+    return model
+
+
+def last_conv_layer(model):
+    """The layer Grad-CAM reads from."""
+    return model.layer4 if hasattr(model, 'layer4') else model.features[-1]
+
+
+def save_model(model, path, **info):
+    torch.save({'state_dict': model.state_dict(), **info}, path)
+
+
+def load_model(path):
+    """Load a checkpoint saved by save_model. Returns (model, info)."""
+    ckpt = torch.load(path, map_location='cpu', weights_only=False)
+    model = build_model(ckpt['backbone'], pretrained=False)
+    model.load_state_dict(ckpt['state_dict'])
+    model.eval()
+    return model, ckpt
