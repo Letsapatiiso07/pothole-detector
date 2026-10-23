@@ -55,7 +55,7 @@ Harsh sun and shadows hurt most: recall falls to 0.767 and 0.872. These filters 
 1. **Download** (`data.py`). The script lists the authors' Google Drive folders for "Dataset 1 (Simplex), Train data": 1,337 pothole frames and 3,399 frames without potholes. 76 file names sit in both folders; the three pairs I checked are the same image, so all 76 are dropped. It then picks frames so each GoPro recording session gives the same number of pothole and normal frames (602 of each in total), so session lighting or camera angle alone does not tell the classes apart. Frames are fetched at a quarter of full size (920x690) together with the authors' pothole boxes, which are used only for the figures.
 2. **Split by session.** GoPro names each frame `G<session><frame>`. Whole sessions go to train (814 frames, sessions 001, 002, 006), validation (124 frames, sessions 004, 005) or test (266 frames, 11 sessions). Frames next to each other in a video look almost the same, so a random split would leak near-copies of test frames into training.
 3. **Crop the road.** The model sees only the band of rows from 42% to 71% of the frame height, where the road ahead is, resized to 736x160. The authors' own notes suggest cropping to the road in the same way.
-4. **Model** (`model.py`, `train.py`). MobileNetV3-Small with ImageNet weights and a one-output head, fine-tuned with AdamW (learning rate 5e-4, cosine decay) for 6 epochs, with random flips and colour changes. The epoch with the lowest validation loss is kept (epoch 2). Training takes about 85 seconds per epoch on 2 CPU threads.
+4. **Model** (`model.py`, `train.py`). MobileNetV3-Small with ImageNet weights and a one-output head, fine-tuned with AdamW (learning rate 5e-4, cosine decay) for 6 epochs, with random flips and colour changes. The epoch with the lowest validation loss is kept (epoch 2). Training took 8 to 9 minutes on 2 CPU threads (about 80 seconds per epoch).
 5. **Evaluate** (`evaluate.py`). Test metrics, the two constant baselines, a bootstrap interval for F1, the figures above, Grad-CAM heat maps (`utils.py`) and the check of where they point, and the filter stress test. Everything is saved to `docs/`, including `docs/results.json`.
 6. **Predict** (`infer.py`). Scores one frame and saves a picture like the one at the top.
 
@@ -69,14 +69,14 @@ source .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 
-python main.py --mode download       # 1,204 frames into data/stellenbosch (about 220 MB)
-python main.py --mode train          # writes models/pothole_classifier.pt
+python main.py --mode download       # 1,204 frames into data/stellenbosch (about 220 MB, 4 minutes)
+python main.py --mode train          # writes models/pothole_classifier.pt (about 8 minutes)
 python main.py --mode evaluate       # prints the tables above, writes docs/
 python main.py --mode predict --image data/stellenbosch/pothole/G0335493.jpg
 python -m pytest tests               # split, sampling, parsing, metric and model tests
 ```
 
-`predict` writes its picture to `predictions/` unless you pass `--out`. Run `python main.py --help` for the other options (backbone, epochs, image width, threshold). Results on another machine may differ a little from the ones above.
+`predict` writes its picture to `predictions/` unless you pass `--out`. Run `python main.py --help` for the other options (backbone, epochs, image width, threshold). A second run from a fresh clone on the same machine gave the same numbers and figures; another machine may differ a little.
 
 The road band assumes a camera mounted like the one in this dataset. Frames from other cameras may need a different band (`ROAD_BAND` in `data.py`).
 
