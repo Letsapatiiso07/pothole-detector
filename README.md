@@ -84,7 +84,7 @@ The road band assumes a camera mounted like the one in this dataset. Frames from
 
 - **Dataset:** pothole image dataset by S. Nienaber, M.J. Booysen and R.S. Kroon, Department of Electrical and Electronic Engineering, Stellenbosch University (2015). Dash-camera frames (GoPro) from South African roads.
 - **Source:** https://drive.google.com/drive/folders/1vUmCvdW3-2lMrhsMbXdMWeLcEz__Ocuy (no login needed). Downloaded on 23 October 2026.
-- **Licence:** the authors share the data openly and ask users to cite the two papers below; their README names no formal licence. The [Kaggle mirror](https://www.kaggle.com/datasets/sovitrath/road-pothole-images-for-pothole-detection) and [Dataset Ninja](https://datasetninja.com/road-pothole-images) list it as CC0 1.0 (public domain). This repo does not contain the images; the download step fetches them from the authors' folder.
+- **Licence:** the authors share the data openly and ask users to cite the two papers below; their README names no formal licence. The [Kaggle mirror](https://www.kaggle.com/datasets/sovitrath/road-pothole-images-for-pothole-detection) and [Dataset Ninja](https://datasetninja.com/road-pothole-images) list it as CC0 1.0 (public domain). This repo does not contain the dataset; the download step fetches it from the authors' folder. The figures in `docs/` show a few of its frames, credited to the authors.
 - **Papers:**
   - S. Nienaber, M.J. Booysen, R.S. Kroon, "Detecting potholes using simple image processing techniques and real-world footage", SATC, July 2015, Pretoria, South Africa.
   - S. Nienaber, R.S. Kroon, M.J. Booysen, "A Comparison of Low-Cost Monocular Vision Techniques for Pothole Distance Estimation", IEEE CIVTS, December 2015, Cape Town, South Africa.
