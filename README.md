@@ -117,4 +117,4 @@ docs/              figures and results.json from the run reported above
 
 Tiiso Letsapa, Letsapamyron07@gmail.com
 
-MIT licence, see [LICENSE.txt](LICENSE.txt).
+Copyright Tiiso Letsapa. All rights reserved, see [LICENSE.txt](LICENSE.txt).
